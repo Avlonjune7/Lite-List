@@ -88,6 +88,9 @@
     "sampleCompleteness": "Sample completeness",
     "sampleWindow": "Window / samples",
     "selectedTasks": "Selected tasks",
+    "degraded": "Degraded",
+    "jitter": "Jitter",
+    "outage": "Outage",
     "stable": "Stable",
     "task": "Probe task",
     "timeRange": "Time range"
@@ -126,6 +129,7 @@
     "stg": "STG",
     "suspectedBlocked": "Suspected block",
     "suspectedBlockedHigh": "High-confidence suspected block",
+    "suspectedBlockedHighShort": "Blocked · High",
     "upload": "Upload",
     "uptime": "Uptime"
   },

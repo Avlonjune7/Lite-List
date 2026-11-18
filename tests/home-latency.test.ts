@@ -6,8 +6,10 @@ import {
   HOME_CARD_WIDTH,
   HOME_FIVE_COL_WIDTH,
   HOME_FOUR_COL_WIDTH,
+  HOME_LATENCY_BUCKET_COUNT,
   HOME_LATENCY_CARD_LIMIT,
   HOME_TWO_COL_WIDTH,
+  buildProbeHealthBuckets,
   formatProbeLatency,
   formatProbePacketLoss,
   homeCardColumnCount,
@@ -18,6 +20,9 @@ import {
   hourPacketFillPercent,
   latencyBarTone,
   mapPingStatsToHomeLatency,
+  mergeHomeLatencyBuckets,
+  probeLossTone,
+  probeRailTone,
   readHomeLatencyCache,
   summarizeHomeLatencySamples,
   writeHomeLatencyCache,
@@ -177,45 +182,137 @@ test("homepage cards keep at most four probe tasks", () => {
   assert.equal(HOME_LATENCY_CARD_LIMIT, 4)
 })
 
-test("homepage probes render as open columns without mini-cards or color dots", () => {
+test("homepage probes render as C-2 telemetry health rails inside a rounded well", () => {
   const latency = readFileSync(new URL("../src/components/ServerLatencySummary.tsx", import.meta.url), "utf8")
   const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8")
   const card = readFileSync(new URL("../src/components/ServerCard.tsx", import.meta.url), "utf8")
   const home = readFileSync(new URL("../src/pages/Server.tsx", import.meta.url), "utf8")
+  const api = readFileSync(new URL("../src/lib/lite-api.ts", import.meta.url), "utf8")
   assert.match(latency, /slice\(0, HOME_LATENCY_CARD_LIMIT\)/)
-  assert.match(latency, /lite-probe-chip/)
+  assert.match(latency, /lite-probe-well/)
+  assert.match(latency, /lite-probe-row/)
+  assert.match(latency, /lite-probe-row__rail/)
+  assert.match(latency, /lite-probe-row__bars/)
+  assert.match(latency, /lite-probe-row__bar/)
+  assert.match(latency, /lite-probe-row__arrow/)
   assert.match(latency, /data-count=\{displayed.length\}/)
-  assert.match(latency, /probeAccentIndex/)
+  assert.match(latency, /returnRoutePillTone/)
   assert.match(latency, /latencyBarTone/)
-  assert.match(css, /data-tone="green"/)
-  assert.doesNotMatch(latency, /lite-probe-chip__bar|lite-probe-chip__fill|lite-probe-dot/)
-  assert.doesNotMatch(css, /lite-probe-chip__bar|lite-probe-dot/)
-  assert.doesNotMatch(latency, /grid-cols-2|stackProbes|col-span-2/)
+  assert.match(latency, /probeRailTone/)
+  assert.match(latency, /probeLossTone/)
+  assert.match(latency, /buildProbeHealthBuckets/)
+  assert.doesNotMatch(latency, /lite-probe-chip__slot/)
+  assert.doesNotMatch(latency, /grid-cols-2|stackProbes|col-span-2|grid-cols-3/)
   assert.doesNotMatch(latency, /homeLatencyGridTemplate|home-latency-cols/)
-  assert.doesNotMatch(css, /\.lite-probe-chip \{[^}]*border:\s*1px solid var\(--card-border\)/)
-  assert.doesNotMatch(css, /\.lite-probe-chip \{[^}]*background:\s*var\(--lite-soft\)/)
-  assert.match(css, /\.lite-probe-chip \{[^}]*background:\s*transparent/)
-  assert.doesNotMatch(css, /\.lite-server-card__probes \{[^}]*border-bottom:\s*1px solid var\(--card-line\)/)
+  assert.doesNotMatch(css, /grid-template-rows:\s*subgrid/)
+  assert.doesNotMatch(css, /\[data-count="3"\]/)
+  assert.doesNotMatch(css, /\[data-count="4"\]/)
+  assert.match(css, /\.lite-probe-well \{[\s\S]*border-radius:\s*11px/)
+  assert.match(css, /\.lite-probe-row \+ \.lite-probe-row \{[\s\S]*border-top:\s*1px solid var\(--probe-row-line\)/)
+  assert.match(css, /\.lite-probe-row__rail \{[\s\S]*width:\s*3px/)
+  assert.match(css, /\.lite-probe-row:hover \.lite-probe-row__rail[\s\S]*width:\s*3\.5px/)
+  assert.match(css, /\.lite-probe-row__delay \{[\s\S]*align-items: baseline/)
+  assert.match(css, /\.lite-probe-row__delay b,[\s\S]*white-space:\s*nowrap/)
+  assert.match(css, /\.lite-probe-row__loss \{[\s\S]*white-space:\s*nowrap/)
   assert.match(css, /\.lite-server-card__quota \{[\s\S]*?border-top:\s*1px solid var\(--card-line\)/)
-  assert.match(css, /\.lite-probe-chip__delay \{[\s\S]*?border-top:\s*1px solid var\(--card-line\)/)
-  assert.match(css, /\[data-count="4"\] \.lite-probe-chip:nth-child\(odd\) \{[\s\S]*?border-right:\s*1px solid var\(--card-line\)/)
-  assert.match(css, /\[data-count="4"\] \.lite-probe-chip:nth-child\(-n\+2\) \{[\s\S]*?border-bottom:\s*1px solid var\(--card-line\)/)
-  assert.match(css, /\[data-count="4"\][\s\S]*grid-template-areas:/)
-  assert.match(css, /\[data-count="4"\] \.lite-probe-chip \{[\s\S]*"delay loss"/)
-  assert.match(css, /\[data-count="4"\] \.lite-probe-chip__delay-value b \{[\s\S]*font-size:\s*20px/)
-  assert.match(css, /\[data-count="4"\] \.lite-probe-chip \{[\s\S]*align-content:\s*space-between/)
-  assert.match(css, /lite-probe-chip__delay-value \{[\s\S]*align-items: baseline/)
-  assert.match(css, /lite-probe-chip__delay-value b,[\s\S]*white-space:\s*nowrap/)
-  assert.match(css, /lite-probe-chip__loss \{[\s\S]*white-space:\s*nowrap/)
-  assert.match(css, /\[data-count="3"\][\s\S]*\.lite-probe-chip__delay-value b[\s\S]*font-size:\s*20px/)
-  assert.match(css, /\[data-count="3"\][\s\S]*\.lite-probe-chip__loss \{[\s\S]*font-size:\s*11px/)
-  assert.match(css, /grid-template-rows:\s*subgrid/)
-  assert.match(css, /\.lite-probe-chip__slot \{[\s\S]*pointer-events:\s*none/)
-  assert.match(css, /\[data-loss="false"\] \{[\s\S]*padding-bottom:\s*14px/)
-  assert.match(css, /\.lite-server-card__quality \{[\s\S]*flex:\s*1 1 auto/)
+  assert.match(css, /\.lite-server-card__quality \{[\s\S]*flex:\s*0 0 auto/)
+  assert.match(css, /\.lite-server-card__bottom \{[\s\S]*margin-top:\s*auto/)
+  assert.match(api, /entity_ids:\s*entityIds/)
+  assert.match(api, /max_points:\s*HOME_LATENCY_BUCKET_COUNT/)
   assert.match(card, /h-full/)
   assert.match(home, /items-stretch/)
-  assert.doesNotMatch(css, /\.lite-server-card__bottom \{[\s\S]*?margin-top:\s*auto/)
+})
+
+test("decouples C-2 stability rail and 12-bucket bars from trans-oceanic orange latency", () => {
+  assert.equal(HOME_LATENCY_BUCKET_COUNT, 12)
+  // Zero-loss US-West 134ms line: amber latency number, green stability rail, 12 steady green bars
+  assert.equal(latencyBarTone(134.09), "amber")
+  assert.equal(probeRailTone({ latency: 134.09, packetLoss: 0 }), "green")
+  assert.equal(probeLossTone(0), "muted")
+  assert.equal(probeLossTone(1.2), "amber")
+  assert.equal(probeLossTone(5), "amber")
+  assert.equal(probeLossTone(5.1), "coral")
+  assert.equal(probeRailTone({ latency: null, packetLoss: null }), "empty")
+  assert.equal(probeRailTone({ latency: 131.9, packetLoss: 0.4 }), "amber")
+  assert.equal(probeRailTone({ latency: 186.4, packetLoss: 0 }), "coral")
+  assert.equal(probeRailTone({ latency: 60, packetLoss: 6.2 }), "coral")
+
+  const steadyBuckets = buildProbeHealthBuckets({
+    latency: 134.09,
+    packetLoss: 0,
+    latencyHistory: [133, 135, 134, 136, 134, 133, 135, 134, 136, 134, 135, 134],
+    packetLossHistory: Array(12).fill(0),
+  })
+  assert.equal(steadyBuckets.length, 12)
+  assert.ok(steadyBuckets.every((item) => item.tone === "green" && item.opacity === 0.68))
+  assert.ok(steadyBuckets.every((item) => item.height >= 6 && item.height <= 7))
+
+  const jitterBuckets = buildProbeHealthBuckets({
+    latency: 132,
+    packetLoss: 1.2,
+    latencyHistory: [130, 132, null, 165, 131, 130, 132, 192, 131, 132, 130, 132],
+    packetLossHistory: [0, 0, null, 2.5, 0, 0, 0, 8.0, 0, 0, 0, 0],
+  })
+  assert.equal(jitterBuckets[2].tone, "empty")
+  assert.equal(jitterBuckets[2].height, 5)
+  assert.equal(jitterBuckets[3].tone, "amber")
+  assert.ok(jitterBuckets[3].height >= 8)
+  assert.equal(jitterBuckets[7].tone, "coral")
+  assert.equal(jitterBuckets[7].height, 10)
+  assert.equal(jitterBuckets[0].tone, "green")
+})
+
+test("gracefully degrades 12-bucket bars from summary stats before bucket series arrives", () => {
+  const empty = buildProbeHealthBuckets({
+    latency: null,
+    packetLoss: null,
+    latencyHistory: [],
+    packetLossHistory: [],
+    total: 0,
+    valid: 0,
+  })
+  assert.equal(empty.length, 12)
+  assert.ok(empty.every((item) => item.tone === "empty" && item.height === 5))
+
+  const singlePointSteady = buildProbeHealthBuckets({
+    latency: 138.5,
+    packetLoss: 0,
+    latencyHistory: [138.5],
+    packetLossHistory: [0],
+    total: 60,
+    valid: 60,
+    interval: 60,
+  })
+  assert.equal(singlePointSteady.length, 12)
+  assert.ok(singlePointSteady.every((item) => item.tone === "green"))
+
+  const partialWindowWithLoss = buildProbeHealthBuckets({
+    latency: 120,
+    packetLoss: 10,
+    latencyHistory: [120],
+    packetLossHistory: [10],
+    total: 20,
+    valid: 18,
+    interval: 60,
+  })
+  assert.equal(partialWindowWithLoss.filter((item) => item.tone === "empty").length, 8)
+  assert.ok(partialWindowWithLoss.some((item) => item.tone === "coral"))
+})
+
+test("merges 12-bucket series into realtime ping stats without losing latest delay", () => {
+  const stats = mapPingStatsToHomeLatency(
+    [{ entity_id: "node-a", task_id: "1", name: "宁波移动", latest: 134.09, loss: 0, total: 60, valid: 60 }],
+    [{ id: 1, name: "宁波移动" }],
+  )
+  const bucket = 5 * 60_000
+  const bucketed = summarizeHomeLatencySamples(
+    Array.from({ length: 12 }, (_, idx) => sample("1", bucket * (idx + 1), 132 + (idx % 3), 0, 5)),
+    12,
+  )
+  const merged = mergeHomeLatencyBuckets(stats, bucketed)
+  assert.equal(merged["node-a"][0].latency, 134.09)
+  assert.equal(merged["node-a"][0].latencyHistory.length, 12)
+  assert.equal(merged["node-a"][0].packetLossHistory.length, 12)
 })
 
 test("homepage card columns follow the server grid breakpoints", () => {

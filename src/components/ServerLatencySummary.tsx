@@ -1,13 +1,20 @@
 import {
   HOME_LATENCY_CARD_LIMIT,
   type HomeLatencyTaskSummary,
+  buildProbeHealthBuckets,
   formatProbeLatency,
   formatProbePacketLoss,
   hourPacketFillPercent,
   latencyBarTone,
+  probeLossTone,
+  probeRailTone,
 } from "@/lib/home-latency"
-import { probeAccentIndex } from "@/lib/home-probe-accent"
-import { returnLineForPingTask, type PublicReturnRoute } from "@/lib/home-return-route"
+import {
+  returnBlockBadgeForRoute,
+  returnLineForPingTask,
+  returnRoutePillTone,
+  type PublicReturnRoute,
+} from "@/lib/home-return-route"
 import { readShowHomePacketLoss, readShowHomeReturnRoute } from "@/lib/theme-config"
 import { useEffect, useRef } from "react"
 import { useTranslation } from "react-i18next"
@@ -15,23 +22,24 @@ import { useTranslation } from "react-i18next"
 function TaskProbe({
   summary,
   returnLine,
-  accentIds,
+  blockedLabel,
   showPacketLoss,
-  keepReturnRow,
   onSelect,
   onPress,
 }: {
   summary: HomeLatencyTaskSummary
   returnLine: string
-  accentIds: readonly string[]
+  blockedLabel: string
   showPacketLoss: boolean
-  keepReturnRow: boolean
   onSelect?: (taskId: string) => void
   onPress?: () => void
 }) {
   const { t } = useTranslation()
   const latency = formatProbeLatency(summary.latency)
   const delayTone = latencyBarTone(summary.latency)
+  const lossTone = probeLossTone(summary.packetLoss)
+  const railTone = probeRailTone(summary)
+  const buckets = buildProbeHealthBuckets(summary)
   const packetLoss = formatProbePacketLoss(summary.packetLoss)
   const percent = hourPacketFillPercent(summary)
   const lossLabel = t("serverCard.packetLoss")
@@ -39,6 +47,7 @@ function TaskProbe({
   const title = [
     summary.taskName,
     returnLine,
+    blockedLabel,
     latencyLabel,
     showPacketLoss ? `${lossLabel} ${packetLoss}` : "",
     t("serverCard.sampleFill", { percent: percent.toFixed(0) }),
@@ -50,40 +59,64 @@ function TaskProbe({
     <button
       type="button"
       title={title}
-      data-accent={probeAccentIndex(summary.taskId, accentIds)}
+      data-rail-tone={railTone}
       data-return={returnLine ? "true" : "false"}
       data-loss={showPacketLoss ? "true" : "false"}
       onPointerDown={() => onPress?.()}
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return
         event.stopPropagation()
-        if (event.key === " ") event.preventDefault()
+        if (event.key === " ") {
+          event.preventDefault()
+          onSelect?.(summary.taskId)
+        }
       }}
       onClick={(event) => {
         if (!onSelect) return
         event.stopPropagation()
         onSelect(summary.taskId)
       }}
-      className="lite-probe-chip"
+      className="lite-probe-row lite-probe-chip"
     >
-      <span className="lite-probe-chip__name" title={summary.taskName}>{summary.taskName}</span>
-      {returnLine ? (
-        <span className="lite-probe-chip__tag">{returnLine}</span>
-      ) : keepReturnRow ? (
-        <span className="lite-probe-chip__slot" aria-hidden="true" />
-      ) : null}
-      <span className="lite-probe-chip__delay">
-        <span className="lite-probe-chip__delay-value tabular-nums" data-tone={delayTone}>
-          <b>{latency.value}</b>
-          {latency.unit ? <small>{latency.unit}</small> : null}
+      <span className="lite-probe-row__rail" data-tone={railTone} aria-hidden="true" />
+      <span className="lite-probe-row__main">
+        <span className="lite-probe-row__head">
+          <span className="lite-probe-row__name" title={summary.taskName}>
+            {summary.taskName}
+          </span>
+          {returnLine ? (
+            <span className="lite-probe-row__tag lite-probe-chip__tag" data-route-tone={returnRoutePillTone(returnLine)}>
+              {returnLine}
+            </span>
+          ) : null}
+        </span>
+        <span className="lite-probe-row__bars" aria-hidden="true">
+          {buckets.map((bucket, index) => (
+            <i
+              key={index}
+              className="lite-probe-row__bar"
+              data-tone={bucket.tone}
+              style={{ height: `${bucket.height}px`, opacity: bucket.opacity }}
+            />
+          ))}
         </span>
       </span>
-      {showPacketLoss ? (
-        <span className="lite-probe-chip__loss">
-          <span>{lossLabel}</span>
-          <b className="tabular-nums">{packetLoss}</b>
+      <span className="lite-probe-row__side">
+        <span className="lite-probe-row__metrics tabular-nums">
+          <strong className="lite-probe-row__delay lite-probe-chip__delay-value" data-tone={delayTone}>
+            <b>{latency.value}</b>
+            {latency.unit ? <small>{latency.unit}</small> : null}
+          </strong>
+          {showPacketLoss ? (
+            <span className="lite-probe-row__loss lite-probe-chip__loss" data-tone={lossTone}>
+              {lossLabel} {packetLoss}
+            </span>
+          ) : null}
         </span>
-      ) : null}
+        <span className="lite-probe-row__arrow" aria-hidden="true">
+          ›
+        </span>
+      </span>
     </button>
   )
 }
@@ -103,9 +136,19 @@ export default function ServerLatencySummary({
   const showReturnRoute = readShowHomeReturnRoute()
   const showPacketLoss = readShowHomePacketLoss()
   const displayed = (summaries || []).slice(0, HOME_LATENCY_CARD_LIMIT)
-  const accentIds = displayed.map((item) => item.taskId)
   const returnLines = displayed.map((item) => (showReturnRoute ? returnLineForPingTask(returnRoute, item.taskId) : ""))
-  const hasAnyReturn = returnLines.some(Boolean)
+  const blockBadge = showReturnRoute ? returnBlockBadgeForRoute(returnRoute) : null
+  const blockedLabel =
+    blockBadge === "high"
+      ? t("serverCard.suspectedBlockedHigh")
+      : blockBadge === "suspected"
+        ? t("serverCard.suspectedBlocked")
+        : ""
+  const blockedShortLabel =
+    blockBadge === "high"
+      ? t("serverCard.suspectedBlockedHighShort")
+      : blockedLabel
+  const hasAnyReturn = Boolean(blockedLabel) || returnLines.some(Boolean)
   const sectionRef = useRef<HTMLElement>(null)
   const prefetchRef = useRef(onPrefetch)
   prefetchRef.current = onPrefetch
@@ -141,36 +184,43 @@ export default function ServerLatencySummary({
       onPointerEnter={() => onPrefetch?.(true)}
       className="lite-server-card__quality"
       data-testid="server-latency-summary"
+      data-blocked={blockBadge || "false"}
     >
       <div className="lite-server-card__quality-title">
-        <h3>{t("serverCard.networkQuality")}</h3>
-        <span>{t("serverCard.recentHour")}</span>
+        <div className="lite-server-card__quality-heading">
+          <h3>{t("serverCard.networkQuality")}</h3>
+          {blockBadge ? (
+            <span className="lite-probe-block-tag" data-confidence={blockBadge} title={blockedLabel}>
+              <i aria-hidden="true" />
+              <span>{blockedShortLabel}</span>
+            </span>
+          ) : null}
+        </div>
+        <span className="lite-server-card__quality-window">{t("serverCard.recentHour")}</span>
       </div>
-      {displayed.length > 0 ? (
-        <div
-          className="lite-server-card__probes"
-          data-count={displayed.length}
-          data-loss={showPacketLoss ? "true" : "false"}
-          data-return={hasAnyReturn ? "true" : "false"}
-        >
-          {displayed.map((item, index) => (
+      <div
+        className="lite-probe-well lite-server-card__probes"
+        data-count={displayed.length}
+        data-loss={showPacketLoss ? "true" : "false"}
+        data-return={hasAnyReturn ? "true" : "false"}
+        data-blocked={blockBadge || "false"}
+      >
+        {displayed.length > 0 ? (
+          displayed.map((item, index) => (
             <TaskProbe
               key={item.taskId}
               summary={item}
               returnLine={returnLines[index] || ""}
-              accentIds={accentIds}
+              blockedLabel={blockedLabel}
               showPacketLoss={showPacketLoss}
-              keepReturnRow={hasAnyReturn && displayed.length < 4}
               onSelect={onSelectTask}
               onPress={() => onPrefetch?.(true)}
             />
-          ))}
-        </div>
-      ) : (
-        <div className="grid place-items-center py-3 text-center text-[11px] leading-snug text-[var(--card-muted)]">
-          {t("monitor.noData")}
-        </div>
-      )}
+          ))
+        ) : (
+          <div className="lite-probe-empty">{t("monitor.noData")}</div>
+        )}
+      </div>
     </section>
   )
 }

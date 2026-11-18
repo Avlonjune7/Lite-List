@@ -45,6 +45,7 @@ const HOME_BUCKET_MS = 5 * MINUTE_MS
 const HOME_LATENCY_CACHE_KEY = "lite-home-latency-v2"
 const HOME_LATENCY_CACHE_MAX_AGE_MS = 5 * MINUTE_MS
 export const HOME_LATENCY_WINDOW_HOURS = 1
+export const HOME_LATENCY_BUCKET_COUNT = 12
 export const HOME_LATENCY_CARD_LIMIT = 4
 export const HOME_LATENCY_GREEN_MAX_MS = 80
 export const HOME_LATENCY_AMBER_MAX_MS = 180
@@ -112,6 +113,148 @@ export function latencyBarTone(latency: number | null): LatencyBarTone {
   return "green"
 }
 
+export type ProbeLossTone = "muted" | "amber" | "coral"
+
+export function probeLossTone(packetLoss: number | null): ProbeLossTone {
+  if (packetLoss === null || !Number.isFinite(packetLoss) || packetLoss <= 0) return "muted"
+  if (packetLoss > 5) return "coral"
+  return "amber"
+}
+
+export function probeRailTone(input: { latency: number | null; packetLoss: number | null }): LatencyBarTone {
+  const latency = finiteNonNegativeOrNull(input.latency)
+  const packetLoss = finiteNonNegativeOrNull(input.packetLoss)
+  if (latency === null && packetLoss === null) return "empty"
+  if ((packetLoss !== null && packetLoss > 5) || (latency !== null && latency >= HOME_LATENCY_AMBER_MAX_MS)) {
+    return "coral"
+  }
+  if (packetLoss !== null && packetLoss > 0) return "amber"
+  return "green"
+}
+
+export interface ProbeHealthBucket {
+  tone: LatencyBarTone
+  height: number
+  opacity: number
+  latency: number | null
+  packetLoss: number | null
+}
+
+function finiteNonNegativeOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? number : null
+}
+
+function rawBucketsFromSummary(
+  summary: Pick<HomeLatencySummary, "latency" | "packetLoss" | "latencyHistory" | "packetLossHistory" | "total" | "valid" | "interval">,
+  bucketCount: number,
+): Array<{ latency: number | null; packetLoss: number | null }> {
+  const latencyHistory = Array.isArray(summary.latencyHistory) ? summary.latencyHistory : []
+  const lossHistory = Array.isArray(summary.packetLossHistory) ? summary.packetLossHistory : []
+  const historyLen = Math.max(latencyHistory.length, lossHistory.length)
+
+  if (historyLen >= 2) {
+    const raw = Array.from({ length: historyLen }, (_, idx) => ({
+      latency: finiteNonNegativeOrNull(latencyHistory[idx] ?? null),
+      packetLoss: finiteNonNegativeOrNull(lossHistory[idx] ?? null),
+    }))
+    if (raw.length >= bucketCount) return raw.slice(raw.length - bucketCount)
+    const padCount = bucketCount - raw.length
+    return [
+      ...Array.from({ length: padCount }, () => ({ latency: null, packetLoss: null })),
+      ...raw,
+    ]
+  }
+
+  const total = finiteOrNull(summary.total)
+  const valid = finiteOrNull(summary.valid)
+  const latency = finiteNonNegativeOrNull(summary.latency)
+  const packetLoss = finiteNonNegativeOrNull(summary.packetLoss)
+  const hasSamples =
+    total !== null
+      ? total > 0
+      : valid !== null
+        ? valid > 0
+        : latency !== null || packetLoss !== null
+
+  if (!hasSamples) {
+    return Array.from({ length: bucketCount }, () => ({ latency: null, packetLoss: null }))
+  }
+
+  const interval = finiteOrNull(summary.interval)
+  let activeCount = bucketCount
+  if (total !== null && total > 0 && interval !== null && interval > 0) {
+    const expected = Math.max(1, Math.floor((HOME_LATENCY_WINDOW_HOURS * 3600) / interval))
+    if (total < expected * 0.85) {
+      activeCount = Math.max(1, Math.min(bucketCount, Math.round((total / expected) * bucketCount)))
+    }
+  }
+
+  const loss = packetLoss ?? 0
+  const lossBuckets = loss > 0 ? Math.max(1, Math.min(activeCount, Math.round((loss / 100) * activeCount))) : 0
+  const emptyPrefix = bucketCount - activeCount
+
+  return Array.from({ length: bucketCount }, (_, idx) => {
+    if (idx < emptyPrefix) return { latency: null, packetLoss: null }
+    const activeIdx = idx - emptyPrefix
+    const isLossBucket =
+      lossBuckets > 0 &&
+      Math.floor(((activeIdx + 1) * lossBuckets) / activeCount) > Math.floor((activeIdx * lossBuckets) / activeCount)
+    if (!isLossBucket) {
+      return { latency, packetLoss: 0 }
+    }
+    const bucketLoss = loss >= 100 ? 100 : loss > 5 ? Math.max(loss, 5.1) : loss
+    const spikeLatency =
+      bucketLoss >= 100
+        ? null
+        : latency !== null
+          ? Math.max(latency * 1.18, latency + 12)
+          : null
+    return { latency: spikeLatency, packetLoss: bucketLoss }
+  })
+}
+
+export function buildProbeHealthBuckets(
+  summary: Pick<HomeLatencySummary, "latency" | "packetLoss" | "latencyHistory" | "packetLossHistory" | "total" | "valid" | "interval">,
+  bucketCount = HOME_LATENCY_BUCKET_COUNT,
+): ProbeHealthBucket[] {
+  const size = Math.max(1, Math.floor(bucketCount))
+  const raw = rawBucketsFromSummary(summary, size)
+  const validDelays = raw.map((item) => item.latency).filter((val): val is number => val !== null)
+  const maxDelay = validDelays.length > 0 ? Math.max(...validDelays) : 0
+  const minDelay = validDelays.length > 0 ? Math.min(...validDelays) : 0
+  const spread = Math.max(maxDelay - minDelay, maxDelay * 0.15, 1)
+
+  return raw.map((bucket) => {
+    if (bucket.latency === null && bucket.packetLoss === null) {
+      return {
+        tone: "empty",
+        height: 5,
+        opacity: 1,
+        latency: null,
+        packetLoss: null,
+      }
+    }
+
+    const loss = bucket.packetLoss ?? 0
+    const delay = bucket.latency
+    const jitterRatio = delay === null ? 1 : Math.min(1, Math.max(0, (delay - minDelay) / spread))
+    const height =
+      loss > 0
+        ? Math.min(10, Math.max(8, Math.round(8 + jitterRatio * 2)))
+        : Math.min(10, Math.max(6, Math.round(6 + jitterRatio * 4)))
+
+    if (loss > 5 || (delay !== null && delay >= HOME_LATENCY_AMBER_MAX_MS) || (delay === null && loss > 0)) {
+      return { tone: "coral", height, opacity: 0.95, latency: delay, packetLoss: bucket.packetLoss }
+    }
+    if (loss > 0) {
+      return { tone: "amber", height, opacity: 0.95, latency: delay, packetLoss: bucket.packetLoss }
+    }
+    return { tone: "green", height, opacity: 0.68, latency: delay, packetLoss: bucket.packetLoss }
+  })
+}
+
 export const PROBE_MISSING_VALUE = "—"
 
 export function formatProbePacketLoss(packetLoss: number | null): string {
@@ -146,7 +289,11 @@ function finiteOrNull(value: unknown): number | null {
   return Number.isFinite(number) ? number : null
 }
 
-export function summarizeHomeLatencySamples(samples: HomeLatencySample[], historyLimit = 12): HomeLatencyByServer {
+export function summarizeHomeLatencySamples(
+  samples: HomeLatencySample[],
+  historyLimit = 12,
+  referenceEndMs?: number | null,
+): HomeLatencyByServer {
   const taskBuckets = new Map<string, TaskBuckets>()
 
   for (const sample of samples) {
@@ -177,12 +324,16 @@ export function summarizeHomeLatencySamples(samples: HomeLatencySample[], histor
     taskBuckets.set(key, task)
   }
 
+  const endMs = finiteOrNull(referenceEndMs)
+  const minAnchorBucket = endMs !== null ? Math.floor(endMs / HOME_BUCKET_MS) * HOME_BUCKET_MS - HOME_BUCKET_MS : null
+
   const summaries: HomeLatencyByServer = {}
   for (const task of taskBuckets.values()) {
-    const latestTimestamp = Math.max(...task.buckets.keys())
+    const latestSampleBucket = Math.max(...task.buckets.keys())
+    const anchorTimestamp = minAnchorBucket !== null ? Math.max(latestSampleBucket, minAnchorBucket) : latestSampleBucket
     const windowSize = Math.max(1, Math.floor(historyLimit))
     const history = Array.from({ length: windowSize }, (_, index) => {
-      const timestamp = latestTimestamp - (windowSize - index - 1) * HOME_BUCKET_MS
+      const timestamp = anchorTimestamp - (windowSize - index - 1) * HOME_BUCKET_MS
       const bucket = task.buckets.get(timestamp)
       return {
         timestamp,
@@ -206,7 +357,7 @@ export function summarizeHomeLatencySamples(samples: HomeLatencySample[], histor
       packetLoss: windowTotalCount > 0 ? (windowLostCount / windowTotalCount) * 100 : null,
       latencyHistory: history.map((item) => item.latency),
       packetLossHistory: history.map((item) => item.packetLoss),
-      updatedAt: latestTimestamp,
+      updatedAt: latestSampleBucket,
       total: windowTotalCount > 0 ? windowTotalCount : null,
       valid: windowTotalCount > 0 ? Math.max(0, windowTotalCount - windowLostCount) : null,
     }
@@ -214,6 +365,56 @@ export function summarizeHomeLatencySamples(samples: HomeLatencySample[], histor
   }
 
   return summaries
+}
+
+export function mergeHomeLatencyBuckets(
+  statsByServer: HomeLatencyByServer,
+  bucketsByServer: HomeLatencyByServer,
+): HomeLatencyByServer {
+  const entityIds = new Set([...Object.keys(statsByServer), ...Object.keys(bucketsByServer)])
+  const merged: HomeLatencyByServer = {}
+
+  for (const entityId of entityIds) {
+    const statList = statsByServer[entityId] || []
+    const bucketList = bucketsByServer[entityId] || []
+    if (bucketList.length === 0) {
+      if (statList.length > 0) merged[entityId] = statList
+      continue
+    }
+    if (statList.length === 0) {
+      merged[entityId] = bucketList
+      continue
+    }
+
+    const bucketByTask = new Map(bucketList.map((item) => [item.taskId, item]))
+    const seen = new Set<string>()
+    const combined: HomeLatencyTaskSummary[] = []
+
+    for (const item of statList) {
+      seen.add(item.taskId)
+      const bucket = bucketByTask.get(item.taskId)
+      if (!bucket) {
+        combined.push(item)
+        continue
+      }
+      combined.push({
+        ...item,
+        latency: item.latency ?? bucket.latency,
+        packetLoss: item.packetLoss ?? bucket.packetLoss,
+        latencyHistory: bucket.latencyHistory,
+        packetLossHistory: bucket.packetLossHistory,
+        updatedAt: item.updatedAt ?? bucket.updatedAt,
+      })
+    }
+
+    for (const bucket of bucketList) {
+      if (!seen.has(bucket.taskId)) combined.push(bucket)
+    }
+
+    if (combined.length > 0) merged[entityId] = combined
+  }
+
+  return merged
 }
 
 export interface PingStatForHome {

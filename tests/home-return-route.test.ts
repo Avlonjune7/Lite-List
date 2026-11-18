@@ -1,13 +1,14 @@
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import test from "node:test"
 
-import { probeAccentIndex, probeAccentForTask } from "../src/lib/home-probe-accent.ts"
 import {
   hasPublicReturnRoute,
   mapPublicReturnRoutes,
+  returnBlockBadgeForRoute,
   returnLineForPingTask,
   returnRouteForServer,
+  returnRoutePillTone,
 } from "../src/lib/home-return-route.ts"
 
 const card = readFileSync(new URL("../src/components/ServerCard.tsx", import.meta.url), "utf8")
@@ -40,6 +41,12 @@ test("maps public return routes without private probe fields", () => {
   assert.equal(returnLineForPingTask(route, "99"), "")
   assert.equal(route?.suspectedBlocked, true)
   assert.equal(route?.highConfidence, true)
+  assert.equal(returnBlockBadgeForRoute(route), "high")
+  assert.equal(
+    returnBlockBadgeForRoute({ client: "node-c", lines: [], tasks: [], suspectedBlocked: true, highConfidence: false }),
+    "suspected",
+  )
+  assert.equal(returnBlockBadgeForRoute(returnRouteForServer(mapped, "node-b")), null)
   assert.equal(hasPublicReturnRoute(returnRouteForServer(mapped, "node-b")), false)
 })
 
@@ -49,32 +56,36 @@ test("homepage cards load public return routes onto matching ping-task chips", (
   assert.match(page, /returnRouteForServer/)
   assert.match(card, /returnRoute=\{returnRoute\}/)
   assert.match(latency, /returnLineForPingTask/)
+  assert.match(latency, /returnBlockBadgeForRoute/)
+  assert.match(latency, /returnRoutePillTone/)
   assert.match(latency, /lite-probe-chip__tag/)
+  assert.match(latency, /lite-probe-block-tag/)
+  assert.match(latency, /serverCard\.suspectedBlockedHighShort/)
+  assert.match(latency, /serverCard\.suspectedBlockedHigh/)
+  assert.match(latency, /serverCard\.suspectedBlocked/)
   assert.doesNotMatch(latency, /reserveReturnSlot/)
-  assert.match(latency, /keepReturnRow=\{hasAnyReturn && displayed.length < 4\}/)
-  assert.match(latency, /lite-probe-chip__slot/)
+  assert.doesNotMatch(latency, /lite-probe-chip__slot/)
   assert.match(latency, /data-return=\{hasAnyReturn \? "true" : "false"\}/)
-  assert.match(latency, /probeAccentIndex\(summary.taskId, accentIds\)/)
   assert.doesNotMatch(latency, /serverCard.returnRouteTag/)
   assert.doesNotMatch(card, /lite-server-card__routes/)
   assert.doesNotMatch(card, /expected_line|ip_version|route_path|asn_path/)
   assert.doesNotMatch(page, /expected_line|ip_version/)
 })
 
-test("keeps probe accent colors unique among tasks on a card", () => {
-  const card = ["4", "5", "9"]
-  assert.equal(probeAccentIndex("4", card), 0)
-  assert.equal(probeAccentIndex("5", card), 1)
-  assert.equal(probeAccentIndex("9", card), 2)
-  assert.notEqual(probeAccentIndex("5", card), probeAccentIndex("9", card))
-  assert.equal(probeAccentIndex("5", ["9", "4", "5"]), probeAccentIndex("5", card))
-  assert.equal(probeAccentIndex("1"), 0)
-  assert.equal(probeAccentIndex("2"), 1)
-  assert.equal(probeAccentIndex("3"), 2)
-  assert.equal(probeAccentIndex("4"), 3)
-  assert.equal(probeAccentForTask("1").accent, "#159C82")
-  assert.equal(probeAccentForTask("2").accent, "#347DDF")
-  assert.equal(probeAccentForTask("3").accent, "#8264D5")
-  assert.equal(probeAccentForTask("4").accent, "#D45C87")
-  assert.equal(probeAccentForTask("5", card).accent, "#347DDF")
+test("classifies return-route pill tones by carrier premium tier", () => {
+  assert.equal(returnRoutePillTone("CMIN2"), "cmin2")
+  assert.equal(returnRoutePillTone("cmi"), "cmin2")
+  assert.equal(returnRoutePillTone("CN2 GIA"), "cn2")
+  assert.equal(returnRoutePillTone("CN2 GT"), "cn2")
+  assert.equal(returnRoutePillTone("CUG VIP"), "cug")
+  assert.equal(returnRoutePillTone("9929"), "cug")
+  assert.equal(returnRoutePillTone("10099"), "cug")
+  assert.equal(returnRoutePillTone("4837"), "plain")
+  assert.equal(returnRoutePillTone("163"), "plain")
+  assert.equal(returnRoutePillTone("CMNET"), "plain")
+  assert.equal(returnRoutePillTone(""), "plain")
+})
+
+test("drops unused home-probe-accent helper after moving to carrier route pills", () => {
+  assert.equal(existsSync(new URL("../src/lib/home-probe-accent.ts", import.meta.url)), false)
 })

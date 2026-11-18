@@ -88,6 +88,9 @@
     "sampleCompleteness": "采样完整度",
     "sampleWindow": "统计周期 / 采样",
     "selectedTasks": "已选任务",
+    "degraded": "异常",
+    "jitter": "波动",
+    "outage": "中断",
     "stable": "稳定",
     "task": "探测任务",
     "timeRange": "时间范围"
@@ -126,6 +129,7 @@
     "stg": "存储",
     "suspectedBlocked": "疑似被墙",
     "suspectedBlockedHigh": "高置信度疑似被墙",
+    "suspectedBlockedHighShort": "疑似被墙 · 高",
     "upload": "上传",
     "uptime": "运行时间"
   },

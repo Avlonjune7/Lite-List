@@ -159,7 +159,16 @@ export default function ServerCard({
         {showTraffic || showFooter ? (
           <div className="lite-server-card__bottom">
             {showTraffic ? (
-              <TrafficBar used={trafficUsed} limit={info.traffic_limit} resetDay={info.traffic_reset_day} limitType={info.traffic_limit_type} />
+              <TrafficBar
+                used={trafficUsed}
+                limit={info.traffic_limit}
+                resetDay={info.traffic_reset_day}
+                resetTime={info.traffic_reset_time}
+                resetTimezone={info.traffic_reset_timezone}
+                resetAt={info.traffic_reset_at}
+                now={now}
+                limitType={info.traffic_limit_type}
+              />
             ) : null}
             {showFooter ? (
               <footer className="lite-server-card__footer">

@@ -88,6 +88,9 @@
     "sampleCompleteness": "サンプル完全度",
     "sampleWindow": "期間 / サンプル",
     "selectedTasks": "選択中",
+    "degraded": "異常",
+    "jitter": "不安定",
+    "outage": "遮断",
     "stable": "安定",
     "task": "プローブタスク",
     "timeRange": "期間"
@@ -126,6 +129,7 @@
     "stg": "ストレージ",
     "suspectedBlocked": "遮断の疑い",
     "suspectedBlockedHigh": "高信頼度の遮断疑い",
+    "suspectedBlockedHighShort": "遮断疑い · 高",
     "upload": "送信",
     "uptime": "稼働時間"
   },

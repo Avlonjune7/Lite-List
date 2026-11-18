@@ -2,11 +2,20 @@ import { SharedClient } from "@/hooks/use-rpc2"
 import { MonitorResponse, ServerGroupResponse, SettingResponse } from "@/types/lite-api"
 
 import { historyMaxPoints, probeHistoryMaxPoints } from "./history-range"
-import { HomeLatencyByServer, mapPingStatsToHomeLatency } from "./home-latency"
+import {
+  HOME_LATENCY_BUCKET_COUNT,
+  HOME_LATENCY_WINDOW_HOURS,
+  HomeLatencyByServer,
+  type HomeLatencySample,
+  mapPingStatsToHomeLatency,
+  mergeHomeLatencyBuckets,
+  summarizeHomeLatencySamples,
+} from "./home-latency"
 import { mapPublicReturnRoutes, type PublicReturnRouteByServer } from "./home-return-route"
 import { mergeAssignedPingMonitors, seedAssignedHomeLatency, unionPingTasksForClient } from "./ping-display"
 import { orderMonitorsByPingTasks } from "./ping-task-order"
 import { mergeResourceSeries, type ResourceHistoryPoint, type ResourceSample, type ResourceTotals } from "./resource-history"
+import { isRpcAuthLossError } from "./rpc-auth"
 import { successLatency } from "./ping-sample"
 import { getLiteNodes, uuidToNumber } from "./utils"
 
@@ -43,6 +52,7 @@ interface LitePingTask {
 }
 
 interface LiteMetricResponse {
+  end?: string
   series?: LiteMetricSeries[]
 }
 
@@ -378,24 +388,135 @@ interface PublicPingMetricStatsResponse {
   stats?: PublicPingMetricStat[]
 }
 
+const HOME_BUCKET_SERIES_TTL_MS = 15_000
+let homeBucketSeriesCache: { key: string; savedAt: number; endMs: number | null; series: LiteMetricSeries[] } | null = null
+
+export function homeLatencySamplesFromMetricSeries(
+  seriesList: LiteMetricSeries[],
+  tasks: Array<{ id?: number | string; name?: string }> = [],
+): HomeLatencySample[] {
+  const taskNames = new Map(tasks.map((task) => [String(task.id), task.name || `Task ${task.id}`]))
+  const lossLookup = buildPingLossLookup(seriesList)
+  const samples: HomeLatencySample[] = []
+  const seenKeys = new Set<string>()
+
+  for (const series of seriesList) {
+    const entityId = String(series.entity_id || "").trim()
+    const taskId = metricTaskId(series)
+    if (series.metric_key !== PING_LATENCY_METRIC || !entityId || !taskId) continue
+
+    const seriesKey = metricSeriesKey(series)
+    const lossPoints = lossLookup.get(seriesKey)
+    const taskName = taskNames.get(taskId) || `Task ${taskId}`
+
+    for (const point of series.points || []) {
+      const time = metricPointTime(point)
+      if (time === null) continue
+      const count = metricPointCount(point)
+      const loss = lossPoints?.get(time)
+      const lossRatio = loss?.ratio ?? (Number(point.value) < 0 ? 1 : 0)
+      const latency =
+        point.value === null || point.value === undefined
+          ? null
+          : latencyWithoutLoss(point.value, count, loss)
+      seenKeys.add(`${seriesKey}\u0000${time}`)
+      samples.push({
+        entityId,
+        taskId,
+        taskName,
+        timestamp: time,
+        latency,
+        lossRatio,
+        count: loss?.count ?? count,
+      })
+    }
+  }
+
+  for (const [seriesKey, lossPoints] of lossLookup) {
+    const sepIndex = seriesKey.indexOf("\u0000")
+    if (sepIndex <= 0) continue
+    const entityId = seriesKey.slice(0, sepIndex)
+    const taskId = seriesKey.slice(sepIndex + 1)
+    if (!entityId || !taskId) continue
+    const taskName = taskNames.get(taskId) || `Task ${taskId}`
+
+    for (const [time, loss] of lossPoints) {
+      if (seenKeys.has(`${seriesKey}\u0000${time}`)) continue
+      samples.push({
+        entityId,
+        taskId,
+        taskName,
+        timestamp: time,
+        latency: null,
+        lossRatio: loss.ratio,
+        count: loss.count,
+      })
+    }
+  }
+
+  return samples
+}
+
+async function fetchHomeBucketSeries(entityIds: string[]): Promise<{ endMs: number | null; series: LiteMetricSeries[] }> {
+  const key = [...entityIds].sort().join(",")
+  if (homeBucketSeriesCache && homeBucketSeriesCache.key === key && Date.now() - homeBucketSeriesCache.savedAt < HOME_BUCKET_SERIES_TTL_MS) {
+    return { endMs: homeBucketSeriesCache.endMs, series: homeBucketSeriesCache.series }
+  }
+
+  try {
+    const result = await SharedClient().call<Record<string, unknown>, LiteMetricResponse>(
+      "public:queryMetrics",
+      {
+        metric_keys: [PING_LATENCY_METRIC, PING_LOSS_METRIC],
+        entity_ids: entityIds,
+        hours: HOME_LATENCY_WINDOW_HOURS,
+        downsample: true,
+        max_points: HOME_LATENCY_BUCKET_COUNT,
+        aggregation: "avg",
+        fill_empty: false,
+      },
+      { timeout: 15000 },
+    )
+    const series = Array.isArray(result?.series) ? result.series.filter((item) => item.entity_id) : []
+    const parsedEnd = Date.parse(result?.end || "")
+    const endMs = Number.isFinite(parsedEnd) ? parsedEnd : null
+    homeBucketSeriesCache = { key, savedAt: Date.now(), endMs, series }
+    return { endMs, series }
+  } catch (error) {
+    if (isRpcAuthLossError(error)) throw error
+    if (homeBucketSeriesCache && homeBucketSeriesCache.key === key) {
+      return { endMs: homeBucketSeriesCache.endMs, series: homeBucketSeriesCache.series }
+    }
+    return { endMs: null, series: [] }
+  }
+}
+
 export async function fetchHomeLatency(entityIds: string[]): Promise<HomeLatencyByServer> {
   const uniqueEntityIds = [...new Set(entityIds.filter(Boolean))]
   if (uniqueEntityIds.length === 0) return {}
 
-  const [statsResult, tasks] = await Promise.all([
+  const [statsResult, bucketData, tasks] = await Promise.all([
     SharedClient().call<Record<string, unknown>, PublicPingMetricStatsResponse>(
       "public:getPingMetricStats",
       {
         entity_ids: uniqueEntityIds,
-        hours: 1,
-        max_points: 12,
+        hours: HOME_LATENCY_WINDOW_HOURS,
+        max_points: HOME_LATENCY_BUCKET_COUNT,
       },
       { timeout: 15000 },
     ),
+    fetchHomeBucketSeries(uniqueEntityIds),
     fetchPublicPingTasks(),
   ])
 
-  return seedAssignedHomeLatency(mapPingStatsToHomeLatency(statsResult?.stats || [], tasks), tasks, uniqueEntityIds)
+  const statsByServer = mapPingStatsToHomeLatency(statsResult?.stats || [], tasks)
+  const samples = homeLatencySamplesFromMetricSeries(bucketData.series, tasks)
+  const bucketsByServer =
+    samples.length > 0
+      ? summarizeHomeLatencySamples(samples, HOME_LATENCY_BUCKET_COUNT, bucketData.endMs)
+      : {}
+
+  return seedAssignedHomeLatency(mergeHomeLatencyBuckets(statsByServer, bucketsByServer), tasks, uniqueEntityIds)
 }
 
 export async function fetchPublicReturnRoutes(): Promise<PublicReturnRouteByServer> {
@@ -500,7 +621,7 @@ export async function fetchResourceHistory(serverId: number, hours: number, tota
   ).catch(() => ({ series: [] as LiteMetricSeries[] }))
 
   const series = Array.isArray(metricResult?.series) ? metricResult.series : []
-  let points = mergeResourceSeries(
+  const points = mergeResourceSeries(
     metricSamples(series, CPU_USAGE_METRIC),
     metricSamples(series, MEMORY_USED_METRIC),
     metricSamples(series, DISK_USED_METRIC),
