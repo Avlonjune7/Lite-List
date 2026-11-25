@@ -112,6 +112,14 @@
     "other": "其他"
   },
   "serverCard": {
+    "copy": "复制地址",
+    "copied": "已复制",
+    "failed": "复制失败",
+    "node": "节点",
+    "os": "系统",
+    "rate": "速率",
+    "traffic": "累计流量",
+    "rowDetails": "{{name}} 的更多信息",
     "cumulative": "累计",
     "days": "天",
     "download": "下载",

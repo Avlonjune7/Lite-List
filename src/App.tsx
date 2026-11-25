@@ -16,7 +16,8 @@ import { cn } from "./lib/utils"
 import ErrorPage from "./pages/ErrorPage"
 import NotFound from "./pages/NotFound"
 import Server from "./pages/Server"
-import ServerDetail from "./pages/ServerDetail"
+
+const ServerDetail = React.lazy(() => import("./pages/ServerDetail"))
 
 const MainApp: React.FC = () => {
   const { data: settingData, error } = useQuery({
@@ -88,13 +89,15 @@ const MainApp: React.FC = () => {
             <Loader visible />
           ) : (
             <RouteView>
-              <Routes>
-                <Route path="/" element={<Server />} />
-                <Route path="/server/:id" element={<ServerDetail />} />
-                <Route path="/instance/:id" element={<ServerDetail />} />
-                <Route path="/error" element={<ErrorPage />} />
-                <Route path="*" element={<NotFound />} />
-              </Routes>
+              <React.Suspense fallback={<Loader visible />}>
+                <Routes>
+                  <Route path="/" element={<Server />} />
+                  <Route path="/server/:id" element={<ServerDetail />} />
+                  <Route path="/instance/:id" element={<ServerDetail />} />
+                  <Route path="/error" element={<ErrorPage />} />
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </React.Suspense>
               <Footer />
             </RouteView>
           )}

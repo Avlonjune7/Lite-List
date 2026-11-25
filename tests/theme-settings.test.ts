@@ -18,11 +18,11 @@ const utils = readFileSync(new URL("../src/lib/utils.ts", import.meta.url), "utf
 test("publishes the independent Lite-Theme identity", () => {
   assert.equal(existsSync(new URL("../Lite-theme.json", import.meta.url)), true)
   assert.equal(existsSync(new URL("../komari-theme.json", import.meta.url)), false)
-  assert.equal(manifest.name, "Lite-Theme")
-  assert.equal(manifest.short, "lite-theme")
-  assert.equal(manifest.version, "1.3.0")
+  assert.equal(manifest.name, "Lite List")
+  assert.equal(manifest.short, "lite-list")
+  assert.equal(manifest.version, "1.3.2")
   assert.equal(manifest.author, "Nomi")
-  assert.equal(manifest.url, "https://github.com/nuomiiiii/Lite-theme")
+  assert.equal(manifest.url, "https://github.com/Avlonjune7/Lite-List")
   assert.equal(manifest.preview, "preview.png")
   assert.equal(manifest.upstream, undefined)
 })
@@ -131,9 +131,7 @@ test("hides empty homepage probe windows only when the theme switch is on", () =
   assert.match(String(setting?.help || ""), /收缩/)
   assert.match(serverCard, /readHideEmptyProbeWindow/)
   assert.match(serverCard, /shouldShowHomeProbeWindow/)
-  assert.match(serverCard, /data-probe-window/)
-  assert.match(serverCard, /self-start/)
-  assert.match(css, /\[data-probe-window="false"\] \{[\s\S]*align-self: start/)
+  assert.match(serverCard, /showProbeWindow \? \(/)
   assert.equal(settings.findIndex((item) => item.key === "ShowHomeReturnRoute"), settings.findIndex((item) => item.name === "探测任务") - 1)
 })
 
@@ -221,8 +219,8 @@ test("shows the site description after the header divider on mobile", () => {
   assert.match(header, /text-\[13px\] leading-5/)
 })
 
-test("does not render IP addresses on public cards or detail identity", () => {
-  assert.doesNotMatch(serverCard, /\.ipv[46]|IPv[46]/)
+test("renders addresses supplied by Lite in the list and keeps them out of detail identity", () => {
+  assert.match(serverCard, /info\.ipv4, info\.ipv6/)
   assert.doesNotMatch(detailOverview, /\.ipv[46]|IPv[46]/)
 })
 
@@ -230,7 +228,7 @@ test("renders country flags as fixed-size SVGs without a framed background", () 
   const flag = readFileSync(new URL("../src/components/ServerFlag.tsx", import.meta.url), "utf8")
   assert.doesNotMatch(serverCard, /rounded-\[4px\] border border-\[#DDE4E9\] bg-\[#F4F7F9\]/)
   assert.match(serverCard, /<ServerFlag /)
-  assert.match(flag, /country-flag-icons\/react\/3x2/)
+  assert.match(flag, /country-flag-icons\/3x2/)
   assert.match(flag, /h-\[15px\] w-\[22px\]/)
   assert.match(flag, /h-\[18px\] w-\[27px\]/)
 })

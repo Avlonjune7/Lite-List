@@ -1,38 +1,24 @@
-# Lite-Theme
+# Lite List
 
-Lite 官方公共大屏主题，版本 `V1.3.1`。
+基于 [Lite 官方主题 v1.3.1](https://github.com/nuomiiiii/Lite-theme) 的服务器列表主题。每台服务器一行，可查看资源用量、实时网速、累计流量和运行时间，点击节点名称进入详情。IP 地址按当前登录权限展示，点击旁边的按钮即可复制。
 
-主题使用与 Lite 管理后台一致的视觉语言，提供服务器概览、服务器详情和网络延迟展示。电脑端按宽度排成 1 至 4 列卡片，移动端自动切换为单列。
+![列表预览](preview.png)
 
-## 功能
+## 安装
 
-- 首页展示服务器状态、资源占用、实时上下行、流量配额、账单剩余天数，以及最多 4 条探测的网络质量。
-- 详情页展示资源用量、流量统计和历史趋势。
-- 网络页可点选一条或多条探测任务看曲线。
-- 支持简体中文、繁体中文、英语和日语。
-- 支持浅色、深色和跟随系统外观。
+从 [Releases](https://github.com/Avlonjune7/Lite-List/releases/latest) 下载主题安装包，在 Lite 后台「主题管理」上传并启用 **Lite List**。主题标识为 `lite-list`。
 
-## 安装及更新
+## 数据刷新
 
-在 Lite 后台「主题管理」上传 GitHub Release 中的 zip，或填写本仓库地址后从原 URL 更新。
-已安装主题的，点击主题卡片后点击「更新主题」。
+首页每 5 秒刷新节点状态。展开行后批量查询这些节点的探测历史；折叠后停止后续历史轮询。启用回程线路展示并展开节点时才查询回程线路。国旗按国家代码加载本地 SVG。
 
 ## 开发
 
-```bash
-npm install
+```sh
+npm ci
 npm run dev
-```
-
-构建与测试：
-
-```bash
-npm run test
+npm test
 npm run build
 ```
 
-构建产物位于 `dist`。主题识别文件见 `Lite-theme.json`。仓库：https://github.com/nuomiiiii/Lite-theme
-
-## 许可
-
-本主题随 Lite 项目分发，许可信息见 `LICENSE`。
+主题包根目录包含 Lite-theme.json、preview.png 和 dist 目录。主题源代码采用 [Apache-2.0](LICENSE)，国旗与系统图标的许可见 public 目录。

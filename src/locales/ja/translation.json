@@ -112,6 +112,14 @@
     "other": "その他"
   },
   "serverCard": {
+    "copy": "アドレスをコピー",
+    "copied": "コピーしました",
+    "failed": "コピーに失敗しました",
+    "node": "ノード",
+    "os": "システム",
+    "rate": "速度",
+    "traffic": "累計通信量",
+    "rowDetails": "{{name}} の追加情報",
     "cumulative": "累計",
     "days": "日",
     "download": "受信",

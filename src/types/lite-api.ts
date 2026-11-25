@@ -4,6 +4,8 @@ export interface LiteWebsocketResponse {
 }
 
 export interface LiteServer {
+  ipv4?: string
+  ipv6?: string
   uuid?: string
   id: number
   name: string

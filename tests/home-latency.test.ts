@@ -219,8 +219,8 @@ test("homepage probes render as C-2 telemetry health rails inside a rounded well
   assert.match(css, /\.lite-server-card__bottom \{[\s\S]*margin-top:\s*auto/)
   assert.match(api, /entity_ids:\s*entityIds/)
   assert.match(api, /max_points:\s*HOME_LATENCY_BUCKET_COUNT/)
-  assert.match(card, /h-full/)
-  assert.match(home, /items-stretch/)
+  assert.match(card, /aria-expanded=\{expanded\}/)
+  assert.match(home, /lite-server-list/)
 })
 
 test("decouples C-2 stability rail and 12-bucket bars from trans-oceanic orange latency", () => {
@@ -334,7 +334,7 @@ test("homepage card columns follow the server grid breakpoints", () => {
   const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8")
   assert.match(css, /max-w-\[1920px\].*max-\[1919px\]:max-w-\[1680px\].*max-\[1439px\]:max-w-\[1120px\]/)
   const home = readFileSync(new URL("../src/pages/Server.tsx", import.meta.url), "utf8")
-  assert.match(home, /repeat\(\$\{cardColumns\}, minmax\(0, 1fr\)\)/)
+  assert.match(home, /lite-list-head lite-list-grid/)
 })
 
 test("two-task probes stack to one per row when a neighbor in the same row already has two probe rows", () => {

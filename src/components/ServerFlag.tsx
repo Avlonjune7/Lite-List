@@ -1,18 +1,10 @@
 import { cn } from "@/lib/utils"
-import * as FlagIcons from "country-flag-icons/react/3x2"
-import type { ReactElement, SVGProps } from "react"
 
-const ALIASES: Record<string, string> = {
-  UK: "GB",
-  EN: "GB",
-}
-
-type FlagComponent = (props: SVGProps<SVGSVGElement>) => ReactElement
-
-function resolveFlag(countryCode: string) {
-  const normalized = ALIASES[countryCode.trim().toUpperCase()] || countryCode.trim().toUpperCase()
-  return (FlagIcons as Record<string, FlagComponent | undefined>)[normalized]
-}
+const flags = import.meta.glob<string>("../../node_modules/country-flag-icons/3x2/*.svg", {
+  eager: true,
+  import: "default",
+  query: "?url&no-inline",
+})
 
 export default function ServerFlag({
   country_code,
@@ -23,18 +15,15 @@ export default function ServerFlag({
   className?: string
   size?: "md" | "lg"
 }) {
-  if (!country_code) return null
-  const Flag = resolveFlag(country_code)
-  if (!Flag) return null
-
-  return (
-    <Flag
-      aria-hidden
-      className={cn(
-        "lite-flag pointer-events-none block shrink-0 overflow-hidden",
-        size === "lg" ? "h-[18px] w-[27px]" : "h-[15px] w-[22px]",
-        className,
-      )}
-    />
+  const code = country_code?.trim().toUpperCase()
+  if (!code) return null
+  const normalized = code === "UK" || code === "EN" ? "GB" : code
+  const url = flags[`../../node_modules/country-flag-icons/3x2/${normalized}.svg`]
+  const flagClassName = cn(
+    "lite-flag pointer-events-none block shrink-0 overflow-hidden",
+    size === "lg" ? "h-[18px] w-[27px]" : "h-[15px] w-[22px]",
+    className,
   )
+  if (!url) return <span aria-hidden className={flagClassName} />
+  return <img src={url} alt="" className={flagClassName} />
 }

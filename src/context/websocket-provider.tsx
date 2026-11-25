@@ -1,8 +1,9 @@
 import { SharedClient } from "@/hooks/use-rpc2"
 import { isRpcAuthLossError } from "@/lib/rpc-auth"
 import { readLiveStatusCache, writeLiveStatusCache } from "@/lib/live-status-cache"
-import { getLiteNodes, normalizeLiteServerStatus } from "@/lib/utils"
-import React, { useCallback, useEffect, useRef, useState } from "react"
+import { getLiteNodes, normalizeLiteServerStatus, parseLiteWebsocketMessage } from "@/lib/utils"
+import type { LiteWebsocketResponse } from "@/types/lite-api"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { WebSocketContext, WebSocketContextType } from "./websocket-context"
 
@@ -18,6 +19,9 @@ function liveStatusStorage(): Storage | null {
 
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [lastMessage, setLastMessage] = useState<{ data: string } | null>(() => readLiveStatusCache(liveStatusStorage()))
+  const [snapshot, setSnapshot] = useState<LiteWebsocketResponse | null>(() =>
+    parseLiteWebsocketMessage(lastMessage?.data),
+  )
   const [connected, setConnected] = useState(false)
   const activeRef = useRef(false)
   const requestRunningRef = useRef(false)
@@ -40,8 +44,13 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const [nodes, status] = await Promise.all([getLiteNodes(false), rpc2.call("common:getNodesLatestStatus")])
       if (!activeRef.current) return
 
-      const message = { data: JSON.stringify(normalizeLiteServerStatus(status, nodes)) }
-      writeLiveStatusCache(liveStatusStorage(), message.data)
+      const nextSnapshot = normalizeLiteServerStatus(status, nodes)
+      const message = { data: JSON.stringify(nextSnapshot) }
+      // Authenticated addresses belong to the live response only.
+      writeLiveStatusCache(liveStatusStorage(), JSON.stringify(nextSnapshot, (key, value) =>
+        key === "ipv4" || key === "ipv6" ? undefined : value,
+      ))
+      setSnapshot(nextSnapshot)
       setLastMessage(message)
       setConnected(true)
     } catch (error) {
@@ -62,21 +71,40 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   useEffect(() => {
     activeRef.current = true
-    void updateData()
+    if (typeof document === "undefined" || !document.hidden) {
+      void updateData()
+    }
 
     intervalIdRef.current = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return
       void updateData()
     }, STATUS_POLL_MS)
 
+    const onVisibilityChange = () => {
+      if (!document.hidden && activeRef.current) {
+        void updateData()
+      }
+    }
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange)
+    }
+
     return () => {
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange)
+      }
       stopPolling()
     }
   }, [stopPolling, updateData])
 
-  const contextValue: WebSocketContextType = {
-    lastMessage,
-    connected,
-  }
+  const contextValue: WebSocketContextType = useMemo(
+    () => ({
+      lastMessage,
+      snapshot,
+      connected,
+    }),
+    [lastMessage, snapshot, connected],
+  )
 
   return <WebSocketContext.Provider value={contextValue}>{children}</WebSocketContext.Provider>
 }

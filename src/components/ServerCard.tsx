@@ -14,9 +14,10 @@ import { readHideEmptyProbeWindow, readShowServerBandwidth, serverBandwidthLabel
 import { calcTrafficUsed, cn, formatLiteInfo, parsePublicNote } from "@/lib/utils"
 import { LiteServer } from "@/types/lite-api"
 import { useQueryClient } from "@tanstack/react-query"
-import { useCallback } from "react"
+import { Check, ChevronDown, Copy, X } from "lucide-react"
+import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { useNavigate } from "react-router-dom"
+import { Link, useNavigate } from "react-router-dom"
 
 import PlanInfo from "./PlanInfo"
 import BillingInfo from "./billingInfo"
@@ -34,11 +35,11 @@ function ResourceMetric({ label, value, unit, percent, swatch }: { label: string
   return (
     <div>
       <div className="lite-server-card__metric-label">
-        <span className="truncate">{label}</span>
-        <b className="shrink-0 tabular-nums">
+        <span className="sr-only">{label}</span>
+        <span className="lite-list-value shrink-0 tabular-nums">
           {value}
           {unit ? <small>{unit}</small> : null}
-        </b>
+        </span>
       </div>
       <div className="lite-server-card__meter" aria-hidden="true">
         <span style={{ width: `${width}%`, background: resourceFill(percent, swatch) }} />
@@ -57,14 +58,74 @@ function SpeedValue({ text }: { text: string }) {
   )
 }
 
-export default function ServerCard({
+function formatOsLabel(platform: string, systemName: string): string {
+  const normalized = (platform || "").trim().replace(/\s+/g, " ")
+  if (!normalized) return systemName
+  if (/^windows\b/i.test(normalized)) {
+    return normalized
+  }
+  const match = normalized.match(/(\d+(?:\.\d+)?)/)
+  return match ? `${systemName} ${match[1]}` : systemName
+}
+
+function Address({ address }: { address: string }) {
+  const { t } = useTranslation()
+  const [feedback, setFeedback] = useState<"idle" | "copied" | "failed">("idle")
+  const timer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const label = t(`serverCard.${feedback === "idle" ? "copy" : feedback}`)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(address)
+      setFeedback("copied")
+    } catch {
+      setFeedback("failed")
+    }
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => setFeedback("idle"), 1500)
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={`${label} ${address}`}
+      aria-label={`${label} ${address}`}
+      className="lite-list-address"
+      data-feedback={feedback}
+    >
+      <span className="truncate tabular-nums">{address}</span>
+      <span className="lite-list-address__icon" aria-hidden="true">
+        {feedback === "copied" ? <Check size={13} color="var(--card-green)" /> :
+          feedback === "failed" ? <X size={13} /> : <Copy size={12} />}
+      </span>
+    </button>
+  )
+}
+
+const osIcons: Record<string, string> = {
+  Debian: "debian", Ubuntu: "ubuntu", Alpine: "alpinelinux", Archlinux: "archlinux",
+  Fedora: "fedora", Centos: "centos", "Rocky Linux": "rockylinux", Redhat: "redhat",
+  Freebsd: "freebsd", FreeBSD: "freebsd", Gentoo: "gentoo", Opensuse: "opensuse",
+  Linuxmint: "linuxmint", "Linux Mint": "linuxmint", Nixos: "nixos", NixOS: "nixos",
+  macOS: "macos", Windows: "windows", Manjaro: "manjaro", Almalinux: "almalinux",
+}
+
+function ServerCard({
   now,
   serverInfo,
+  formattedInfo,
+  expanded,
+  onToggle,
+  hasAssignedProbe,
   latencySummaries,
   returnRoute,
 }: {
   now: number
   serverInfo: LiteServer
+  expanded: boolean
+  onToggle: (id: number) => void
+  hasAssignedProbe: boolean
+  formattedInfo?: ReturnType<typeof formatLiteInfo>
   latencySummaries?: HomeLatencyTaskSummary[]
   returnRoute?: PublicReturnRoute
 }) {
@@ -75,72 +136,68 @@ export default function ServerCard({
     (priority: boolean) => prefetchServerMonitor(queryClient, serverInfo.id, { priority }),
     [queryClient, serverInfo.id],
   )
-  const info = formatLiteInfo(now, serverInfo)
+  const info = formattedInfo ?? formatLiteInfo(now, serverInfo)
   const parsedData = parsePublicNote(info.public_note)
   const systemName = info.platform.includes("Windows") ? "Windows" : GetOsName(info.platform)
+  const osLabel = formatOsLabel(info.platform, systemName)
   const trafficUsed = calcTrafficUsed(info.net_out_transfer, info.net_in_transfer, info.traffic_limit_type)
   const bandwidth = serverBandwidthLabel(serverInfo.bandwidth)
   const showBandwidth = readShowServerBandwidth() && Boolean(bandwidth)
   const showTags = parseCardTags({ tags: serverInfo.tags, extra: parsedData?.planDataMod?.extra }).length > 0
   const showTraffic = info.traffic_limit > 0
   const showFooter = Boolean(parsedData?.billingDataMod || showTags || showBandwidth)
-  const showProbeWindow = shouldShowHomeProbeWindow(latencySummaries?.length ?? 0, readHideEmptyProbeWindow())
-  const openDetail = () => {
-    saveHomeScroll()
-    navigate(`/server/${serverInfo.id}`)
-  }
+  const showProbeWindow = shouldShowHomeProbeWindow(latencySummaries?.length || Number(hasAssignedProbe), readHideEmptyProbeWindow())
+  const hasDetails = showProbeWindow || showTraffic || showFooter
 
   return (
     <article
-      role="link"
-      tabIndex={0}
-      data-online={info.online ? "true" : "false"}
-      data-probe-window={showProbeWindow ? "true" : "false"}
-      onClick={openDetail}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget) return
-        if (event.key !== "Enter" && event.key !== " ") return
-        event.preventDefault()
-        openDetail()
-      }}
-      className={cn("lite-server-card flex min-w-0 cursor-pointer flex-col", showProbeWindow ? "h-full" : "self-start")}
+      className="lite-server-card min-w-0"
+      data-online={info.online}
     >
       <div className="lite-server-card__frame">
-        <header className="lite-server-card__hero">
+        <header className="lite-server-card__hero lite-list-grid">
           <div className="flex min-w-0 items-center gap-2.5">
-            <ServerFlag country_code={info.country_code} className="h-[18px] w-[26px] rounded-[3px]" />
-            <span className="min-w-0 flex-1">
-              <strong className="lite-server-card__name block truncate" title={info.name}>{info.name}</strong>
-              <span className="lite-server-card__subtitle block truncate">
-                {systemName} · {info.arch || "--"}
+            <span role="img" aria-label={info.online ? t("online") : t("offline")} title={info.online ? t("online") : t("offline")}
+              className={cn("size-2 shrink-0 rounded-full", info.online ? "bg-[var(--card-green)]" : "bg-[var(--card-danger)]")} />
+            <ServerFlag country_code={info.country_code} className="h-3.5 w-5 shrink-0 rounded-sm" />
+            <div className="flex min-w-0 flex-col">
+              <Link className="lite-server-card__name truncate hover:underline" title={info.name} to={`/server/${serverInfo.id}`} onClick={saveHomeScroll}>{info.name}</Link>
+              <span className="lite-list-os-sub truncate" title={`${osLabel} · ${info.arch || "--"}`}>
+                <img src={`/os/${osIcons[systemName] || "linux"}.svg`} alt="" width={12} height={12} aria-hidden="true" />
+                <span className="truncate">{osLabel}</span>
               </span>
-            </span>
-            <span className={cn("lite-server-card__status inline-flex shrink-0 items-center gap-1.5 self-start", info.online ? "lite-server-card__status--online" : "lite-server-card__status--offline")}>
-              <i className={cn("size-[5px] rounded-full", info.online ? "bg-[var(--card-green)]" : "bg-[var(--card-danger)]")} />
-              {info.online ? t("online") : t("offline")}
-            </span>
-          </div>
-          <div className="lite-server-card__rates">
-            <div className="min-w-0">
-              <span className="lite-server-card__rate-label lite-server-card__rate-label--up"><span>↑</span>{t("serverCard.upload")}</span>
-              <SpeedValue text={formatSpeed(info.up)} />
-              <span className="lite-server-card__rate-total block truncate tabular-nums">{t("serverCard.cumulative")} {formatBytes(info.net_out_transfer)}</span>
-            </div>
-            <div className="min-w-0">
-              <span className="lite-server-card__rate-label lite-server-card__rate-label--down"><span>↓</span>{t("serverCard.download")}</span>
-              <SpeedValue text={formatSpeed(info.down)} />
-              <span className="lite-server-card__rate-total block truncate tabular-nums">{t("serverCard.cumulative")} {formatBytes(info.net_in_transfer)}</span>
             </div>
           </div>
-        </header>
-
-        <div className="lite-server-card__body">
-          <section className="lite-server-card__resources">
+          <div className="lite-list-ip-cell min-w-0">
+            {[info.ipv4, info.ipv6].filter(Boolean).map(address => <Address key={address} address={address!} />)}
+            {!info.ipv4 && !info.ipv6 && "—"}
+          </div>
+          <div className="lite-list-pair">
+            <span title={t("serverCard.download")}><i aria-hidden="true">↓</i><span className="sr-only">{t("serverCard.download")}</span><SpeedValue text={formatSpeed(info.down)} /></span>
+            <span title={t("serverCard.upload")}><i aria-hidden="true">↑</i><span className="sr-only">{t("serverCard.upload")}</span><SpeedValue text={formatSpeed(info.up)} /></span>
+          </div>
+          <div className="lite-list-pair lite-list-value">
+            <span title={t("serverCard.download")}><i>↓</i>{formatBytes(info.net_in_transfer)}</span>
+            <span title={t("serverCard.upload")}><i>↑</i>{formatBytes(info.net_out_transfer)}</span>
+          </div>
             <ResourceMetric label="CPU" value={info.cpu.toFixed(1)} unit="%" percent={info.cpu} swatch={RESOURCE_SWATCH.cpu} />
             <ResourceMetric label={t("serverCard.mem")} value={info.mem.toFixed(1)} unit="%" percent={info.mem} swatch={RESOURCE_SWATCH.memory} />
             <ResourceMetric label={t("serverCard.stg")} value={info.stg.toFixed(1)} unit="%" percent={info.stg} swatch={RESOURCE_SWATCH.storage} />
             <ResourceMetric label={t("serverCard.load")} value={String(info.load_1)} percent={loadUsagePercent(info.load_1, info.cpu_cores)} swatch={RESOURCE_SWATCH.load} />
-          </section>
+          <span className="whitespace-nowrap tabular-nums">
+            {info.uptime > 0 ? `${Math.floor(info.uptime / 86400)} ${t("serverCard.days")} ${Math.floor(info.uptime % 86400 / 3600)} ${t("serverCard.hours")}` : "—"}
+          </span>
+          {hasDetails && (
+            <button type="button" className="lite-list-toggle" aria-expanded={expanded}
+              aria-label={t("serverCard.rowDetails", { name: info.name })}
+              onClick={() => onToggle(serverInfo.id)}>
+              <ChevronDown size={18} aria-hidden="true" />
+            </button>
+          )}
+        </header>
+        {expanded && <>
+
+        <div className="lite-server-card__body">
 
           {showProbeWindow ? (
             <ServerLatencySummary
@@ -197,7 +254,10 @@ export default function ServerCard({
             ) : null}
           </div>
         ) : null}
+        </>}
       </div>
     </article>
   )
 }
+
+export default memo(ServerCard)

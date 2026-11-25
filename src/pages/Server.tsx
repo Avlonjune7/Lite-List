@@ -5,18 +5,18 @@ import { Loader } from "@/components/loading/Loader"
 import type { SortType } from "@/context/sort-context"
 import { useStatus } from "@/hooks/use-status"
 import { useWebSocketContext } from "@/hooks/use-websocket-context"
-import { homeCardColumnCount, readHomeLatencyCache, writeHomeLatencyCache } from "@/lib/home-latency"
+import { readHomeLatencyCache, writeHomeLatencyCache } from "@/lib/home-latency"
 import { applyHomeProbeTaskOrder, homeProbeOverrideIds } from "@/lib/home-probe-tasks"
 import { restoreHomeScroll, saveHomeScroll } from "@/lib/home-scroll"
 import { returnRouteForServer } from "@/lib/home-return-route"
-import { fetchHomeLatency, fetchPublicReturnRoutes, fetchServerGroup } from "@/lib/lite-api"
+import { fetchHomeLatency, fetchPublicPingTasks, fetchPublicReturnRoutes, fetchServerGroup } from "@/lib/lite-api"
 import { compareHomeServers, readThemeHomeSort } from "@/lib/theme-home-sort"
-import { readHomeProbeTaskOverrides } from "@/lib/theme-config"
+import { readHideEmptyProbeWindow, readShowHomeReturnRoute, readHomeProbeTaskOverrides } from "@/lib/theme-config"
 import { formatLiteInfo, parseLiteWebsocketMessage } from "@/lib/utils"
 import { ServerGroup } from "@/types/lite-api"
 import { MenuItem, Select } from "@mui/material"
 import { useQuery } from "@tanstack/react-query"
-import { useEffect, useLayoutEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 function homeLatencyStorage(): Storage | null {
@@ -35,22 +35,10 @@ const SORT_OPTION_KEYS: Array<{ value: SortType; labelKey: string }> = [
   { value: "down", labelKey: "home.sortDownload" },
 ]
 
-function useHomeCardColumns() {
-  const [columns, setColumns] = useState(() => (typeof window === "undefined" ? 1 : homeCardColumnCount(window.innerWidth)))
-  useLayoutEffect(() => {
-    const update = () => setColumns(homeCardColumnCount(window.innerWidth))
-    update()
-    window.addEventListener("resize", update)
-    return () => window.removeEventListener("resize", update)
-  }, [])
-  return columns
-}
-
 export default function Servers() {
   const { t } = useTranslation()
   const { status } = useStatus()
-  const { lastMessage, connected } = useWebSocketContext()
-  const cardColumns = useHomeCardColumns()
+  const { lastMessage, snapshot, connected } = useWebSocketContext()
   const [currentGroup, setCurrentGroup] = useState("All")
   const themeSort = readThemeHomeSort()
   const [sortType, setSortType] = useState<SortType>(themeSort.sortType)
@@ -61,38 +49,19 @@ export default function Servers() {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   })
-  const websocketData = parseLiteWebsocketMessage(lastMessage?.data)
-  const latencyEntityKey = useMemo(
-    () =>
-      (websocketData?.servers || [])
-        .map((server) => server.uuid)
-        .filter((uuid): uuid is string => Boolean(uuid))
-        .sort()
-        .join(","),
-    [websocketData?.servers],
+  const websocketData = useMemo(
+    () => snapshot ?? parseLiteWebsocketMessage(lastMessage?.data),
+    [snapshot, lastMessage?.data],
   )
-  const latencyEntityIds = latencyEntityKey ? latencyEntityKey.split(",") : []
-  const { data: homeLatency = {} } = useQuery({
-    queryKey: ["home-latency", latencyEntityKey],
-    queryFn: async () => {
-      const data = await fetchHomeLatency(latencyEntityIds)
-      writeHomeLatencyCache(homeLatencyStorage(), data)
-      return data
-    },
-    placeholderData: () => readHomeLatencyCache(homeLatencyStorage(), latencyEntityIds),
-    enabled: latencyEntityIds.length > 0,
-    staleTime: 5_000,
-    refetchInterval: 5_000,
-    refetchOnWindowFocus: false,
-  })
-  const { data: returnRoutes = {} } = useQuery({
-    queryKey: ["home-return-routes"],
-    queryFn: fetchPublicReturnRoutes,
-    enabled: latencyEntityIds.length > 0,
-    staleTime: 15_000,
-    refetchInterval: 15_000,
-    refetchOnWindowFocus: false,
-  })
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(() => new Set())
+  const toggleRow = useCallback((id: number) => {
+    setExpandedIds(previous => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
 
   useLayoutEffect(() => {
     restoreHomeScroll()
@@ -133,6 +102,124 @@ export default function Servers() {
     sessionStorage.setItem("selectedGroup", group)
   }
 
+  const groupedServers = useMemo(() => {
+    if (!websocketData) return []
+    return websocketData.servers.filter((server) => {
+      if (currentGroup === "All") return true
+      return groupData?.data?.some((group: ServerGroup) => group.group.name === currentGroup && group.servers?.includes(server.id))
+    })
+  }, [websocketData, currentGroup, groupData?.data])
+
+  const infoMap = useMemo(() => {
+    const map = new Map<number, ReturnType<typeof formatLiteInfo>>()
+    if (!websocketData) return map
+    for (const server of groupedServers) {
+      map.set(server.id, formatLiteInfo(websocketData.now, server))
+    }
+    return map
+  }, [groupedServers, websocketData])
+
+  const { totalServers, onlineServers, offlineServers, up, down, upSpeed, downSpeed, regionServers, filteredServers } = useMemo(() => {
+    if (!websocketData) {
+      return {
+        totalServers: 0,
+        onlineServers: 0,
+        offlineServers: 0,
+        up: 0,
+        down: 0,
+        upSpeed: 0,
+        downSpeed: 0,
+        regionServers: [],
+        filteredServers: [],
+      }
+    }
+    const total = groupedServers.length
+    let onlineCount = 0
+    let totalUp = 0
+    let totalDown = 0
+    let totalUpSpeed = 0
+    let totalDownSpeed = 0
+    const regions: Array<{ country_code?: string; online: boolean; cpu?: number; mem?: number; tcp?: number; udp?: number; cpu_cores?: number; mem_total?: number; mem_used?: number; disk_total?: number; disk_used?: number }> = []
+    const statusList: typeof groupedServers = []
+
+    for (const server of groupedServers) {
+      const info = infoMap.get(server.id)!
+      if (info.online) {
+        onlineCount++
+        totalUp += server.state?.net_out_transfer || 0
+        totalDown += server.state?.net_in_transfer || 0
+        totalUpSpeed += (server.state?.net_out_speed || 0) / 1000 / 1000
+        totalDownSpeed += (server.state?.net_in_speed || 0) / 1000 / 1000
+      }
+      regions.push({
+        country_code: info.country_code,
+        online: info.online,
+        cpu: info.cpu,
+        mem: info.mem,
+        tcp: info.tcp,
+        udp: info.udp,
+        cpu_cores: info.cpu_cores,
+        mem_total: info.mem_total,
+        mem_used: server.state?.mem_used || 0,
+        disk_total: info.disk_total,
+        disk_used: server.state?.disk_used || 0,
+      })
+      if (status === "all" || (info.online ? "online" : "offline") === status) {
+        statusList.push(server)
+      }
+    }
+
+    statusList.sort((a, b) => compareHomeServers(a, b, websocketData.now, sortType, sortOrder, infoMap))
+    return {
+      totalServers: total,
+      onlineServers: onlineCount,
+      offlineServers: total - onlineCount,
+      up: totalUp,
+      down: totalDown,
+      upSpeed: totalUpSpeed,
+      downSpeed: totalDownSpeed,
+      regionServers: regions,
+      filteredServers: statusList,
+    }
+  }, [groupedServers, infoMap, websocketData, status, sortType, sortOrder])
+
+  const latencyEntityIds = useMemo(() => filteredServers
+    .filter(server => expandedIds.has(server.id))
+    .flatMap(server => server.uuid ? [server.uuid] : [])
+    .sort(), [filteredServers, expandedIds])
+
+  const { data: tasks } = useQuery({
+    queryKey: ["home-probe-assignments"],
+    queryFn: fetchPublicPingTasks,
+    enabled: readHideEmptyProbeWindow() && filteredServers.length > 0,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  })
+  const assignedClients = useMemo(() => new Set(tasks?.flatMap(task =>
+    (task.clients || []).map(id => id.toLowerCase()))), [tasks])
+
+  const { data: homeLatency = {} } = useQuery({
+    queryKey: ["home-latency", latencyEntityIds],
+    queryFn: async () => {
+      const data = await fetchHomeLatency(latencyEntityIds)
+      writeHomeLatencyCache(homeLatencyStorage(), data)
+      return data
+    },
+    placeholderData: () => readHomeLatencyCache(homeLatencyStorage(), latencyEntityIds),
+    enabled: latencyEntityIds.length > 0,
+    staleTime: 5_000,
+    refetchInterval: 5_000,
+    refetchOnWindowFocus: false,
+  })
+  const { data: returnRoutes = {} } = useQuery({
+    queryKey: ["home-return-routes"],
+    queryFn: fetchPublicReturnRoutes,
+    enabled: latencyEntityIds.length > 0 && readShowHomeReturnRoute(),
+    staleTime: 15_000,
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: false,
+  })
+
   if (!connected && !lastMessage) {
     return <Loader visible />
   }
@@ -147,27 +234,6 @@ export default function Servers() {
       ?.filter((item: ServerGroup) => item.servers?.some((serverId) => websocketData.servers.some((server) => server.id === serverId)))
       .map((item: ServerGroup) => item.group.name) || []),
   ]
-  const groupedServers = websocketData.servers.filter((server) => {
-    if (currentGroup === "All") return true
-    return groupData?.data?.some((group: ServerGroup) => group.group.name === currentGroup && group.servers?.includes(server.id))
-  })
-  const totalServers = groupedServers.length
-  const onlineServers = groupedServers.filter((server) => formatLiteInfo(websocketData.now, server).online).length
-  const offlineServers = totalServers - onlineServers
-  const onlineOnly = groupedServers.filter((server) => formatLiteInfo(websocketData.now, server).online)
-  const up = onlineOnly.reduce((total, server) => total + (server.state?.net_out_transfer || 0), 0)
-  const down = onlineOnly.reduce((total, server) => total + (server.state?.net_in_transfer || 0), 0)
-  const upSpeed = onlineOnly.reduce((total, server) => total + ((server.state?.net_out_speed || 0) / 1000 / 1000), 0)
-  const downSpeed = onlineOnly.reduce((total, server) => total + ((server.state?.net_in_speed || 0) / 1000 / 1000), 0)
-  const regionServers = groupedServers.map((server) => {
-    const info = formatLiteInfo(websocketData.now, server)
-    return { country_code: info.country_code, online: info.online, cpu: info.cpu, mem: info.mem, tcp: info.tcp, udp: info.udp, cpu_cores: info.cpu_cores, mem_total: info.mem_total, mem_used: server.state?.mem_used || 0, disk_total: info.disk_total, disk_used: server.state?.disk_used || 0 }
-  })
-  const statusFiltered =
-    status === "all"
-      ? groupedServers
-      : groupedServers.filter((server) => (formatLiteInfo(websocketData.now, server).online ? "online" : "offline") === status)
-  const filteredServers = [...statusFiltered].sort((a, b) => compareHomeServers(a, b, websocketData.now, sortType, sortOrder))
   const probeOverrides = readHomeProbeTaskOverrides()
   const latencyFor = (uuid?: string) =>
     applyHomeProbeTaskOrder(uuid ? homeLatency[uuid] || [] : [], homeProbeOverrideIds(probeOverrides, uuid || ""))
@@ -184,7 +250,7 @@ export default function Servers() {
         now={websocketData.now}
         servers={regionServers}
       />
-      <section className="mb-4 mt-2 flex items-center justify-between gap-3 max-[967px]:mt-2 max-[967px]:grid max-[967px]:grid-cols-[minmax(0,1fr)_auto] max-[967px]:items-center max-[967px]:gap-x-2.5 max-[967px]:gap-y-2.5" aria-label={t("home.filter")}>
+      <section className="mb-5 mt-7 flex items-center justify-between gap-3 max-[967px]:mt-5 max-[967px]:grid max-[967px]:grid-cols-[minmax(0,1fr)_auto] max-[967px]:items-center max-[967px]:gap-x-2.5 max-[967px]:gap-y-2.5" aria-label={t("home.filter")}>
         <div className="flex min-w-0 items-center gap-3 max-[967px]:contents">
           <div className="flex items-end gap-2.5 max-[967px]:col-start-1 max-[967px]:row-start-1">
             <h2 className="m-0 text-lg font-semibold leading-none text-[#1C252E] dark:text-white">{t("home.allServers")}</h2>
@@ -207,19 +273,28 @@ export default function Servers() {
         </Select>
       </section>
       <section
-        className="grid items-stretch gap-4"
-        style={{ gridTemplateColumns: `repeat(${cardColumns}, minmax(0, 1fr))` }}
-        aria-label="Server list"
+        className="lite-list-scroll"
+        aria-label={t("home.allServers")}
       >
+        <div className="lite-server-list">
+          <div className="lite-list-head lite-list-grid">
+            {[t("serverCard.node"), "IP", t("serverCard.rate"), t("serverCard.traffic"), "CPU",
+              t("serverCard.mem"), t("serverCard.stg"), t("serverCard.load"), t("serverCard.uptime")].map(label => <span key={label}>{label}</span>)}
+          </div>
         {filteredServers.map((serverInfo) => (
           <ServerCard
             now={websocketData.now}
             key={serverInfo.id}
             serverInfo={serverInfo}
+            expanded={expandedIds.has(serverInfo.id)}
+            onToggle={toggleRow}
+            hasAssignedProbe={assignedClients.has(serverInfo.uuid?.toLowerCase() ?? "")}
+            formattedInfo={infoMap.get(serverInfo.id)}
             latencySummaries={latencyFor(serverInfo.uuid)}
             returnRoute={returnRouteForServer(returnRoutes, serverInfo.uuid)}
           />
         ))}
+        </div>
       </section>
     </div>
   )

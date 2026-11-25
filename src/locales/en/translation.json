@@ -112,6 +112,14 @@
     "other": "Other"
   },
   "serverCard": {
+    "copy": "Copy address",
+    "copied": "Copied",
+    "failed": "Copy failed",
+    "node": "Node",
+    "os": "System",
+    "rate": "Speed",
+    "traffic": "Total traffic",
+    "rowDetails": "More information about {{name}}",
     "cumulative": "Total",
     "days": "Days",
     "download": "Download",

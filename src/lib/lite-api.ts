@@ -136,7 +136,7 @@ function asPingTaskList(value: unknown): LitePingTask[] {
   return []
 }
 
-async function fetchPublicPingTasks(): Promise<LitePingTask[]> {
+export async function fetchPublicPingTasks(): Promise<LitePingTask[]> {
   if (pingTaskCache && Date.now() - pingTaskCache.savedAt < PING_TASK_TTL_MS) {
     return pingTaskCache.tasks
   }

@@ -15,9 +15,16 @@ export function readThemeHomeSort(): { sortType: SortType; sortOrder: SortOrder 
   return { sortType, sortOrder }
 }
 
-export function compareHomeServers(a: LiteServer, b: LiteServer, now: number, sortType: SortType, sortOrder: SortOrder): number {
-  const aInfo = formatLiteInfo(now, a)
-  const bInfo = formatLiteInfo(now, b)
+export function compareHomeServers(
+  a: LiteServer,
+  b: LiteServer,
+  now: number,
+  sortType: SortType,
+  sortOrder: SortOrder,
+  infoMap?: Map<number, ReturnType<typeof formatLiteInfo>>,
+): number {
+  const aInfo = infoMap?.get(a.id) ?? formatLiteInfo(now, a)
+  const bInfo = infoMap?.get(b.id) ?? formatLiteInfo(now, b)
   if (sortType !== "name" && aInfo.online !== bInfo.online) return aInfo.online ? -1 : 1
 
   let comparison = 0
